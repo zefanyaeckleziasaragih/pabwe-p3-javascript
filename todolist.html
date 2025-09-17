@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Todo List — 11S23050</title>
+
+    <!-- Bootstrap 5 (lokal, sesuai struktur folder) -->
+    <link
+      href="assets/vendor/bootstrap-5.3.7/package/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <!-- Bootstrap Icons (lokal) -->
+    <link
+      href="assets/vendor/bootstrap-icons-1.13.1/package/font/bootstrap-icons.css"
+      rel="stylesheet"
+    />
+    <!-- SortableJS -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+    <style>
+      .drag-handle {
+        cursor: grab;
+      }
+      .todo-editing .todo-label {
+        display: none;
+      }
+      .todo-editing .todo-input {
+        display: inline-block;
+      }
+      .todo-input {
+        display: none;
+        width: 100%;
+      }
+      .list-group-item.d-flex {
+        gap: 0.5rem;
+        align-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container py-5" style="max-width: 900px">
+      <h1 class="mb-3">Todo List</h1>
+
+      <!-- Controls: Add, Filter, Search -->
+      <div class="card mb-4">
+        <div class="card-body">
+          <form id="formAdd" class="mb-3">
+            <div class="input-group">
+              <span class="input-group-text"
+                ><i class="bi bi-list-check"></i
+              ></span>
+              <input
+                id="inputTodo"
+                name="todo"
+                type="text"
+                class="form-control"
+                placeholder="Tambah todo baru..."
+                aria-label="Todo title"
+              />
+              <button class="btn btn-primary" type="submit">
+                <i class="bi bi-plus-lg"></i> Tambah
+              </button>
+            </div>
+            <div
+              id="addFeedback"
+              class="form-text text-danger mt-1"
+              style="display: none"
+            ></div>
+          </form>
+
+          <div class="row g-2">
+            <div class="col-sm-8">
+              <div class="btn-group" role="group" aria-label="Filter todos">
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary filter-btn active"
+                  data-filter="all"
+                >
+                  Semua
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary filter-btn"
+                  data-filter="active"
+                >
+                  Belum Selesai
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary filter-btn"
+                  data-filter="completed"
+                >
+                  Selesai
+                </button>
+              </div>
+            </div>
+            <div class="col-sm-4">
+              <input
+                id="inputSearch"
+                type="search"
+                class="form-control"
+                placeholder="Cari..."
+                aria-label="Search"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Todo list -->
+      <ul id="todoList" class="list-group mb-3"></ul>
+
+      <div class="d-flex justify-content-between align-items-center">
+        <small id="statusInfo" class="text-muted"
+          >0 todo — urutan disimpan.</small
+        >
+        <div>
+          <button id="clearCompleted" class="btn btn-sm btn-outline-danger">
+            Hapus Selesai
+          </button>
+          <button id="exportBtn" class="btn btn-sm btn-outline-secondary">
+            Export JSON
+          </button>
+          <button id="importBtn" class="btn btn-sm btn-outline-secondary">
+            Import JSON
+          </button>
+        </div>
+      </div>
+
+      <!-- hidden file input for import -->
+      <input
+        id="importFile"
+        type="file"
+        accept="application/json"
+        style="display: none"
+      />
+    </div>
+
+    <script>
+      // Data model: array of objects {id, todo, completed}
+      const STORAGE_KEY = "todos_v2";
+      let todos = [];
+      let currentFilter = "all"; // all | active | completed
+      let currentSearch = "";
+
+      // DOM refs
+      const todoListEl = document.getElementById("todoList");
+      const formAdd = document.getElementById("formAdd");
+      const inputTodo = document.getElementById("inputTodo");
+      const addFeedback = document.getElementById("addFeedback");
+      const filterBtns = document.querySelectorAll(".filter-btn");
+      const inputSearch = document.getElementById("inputSearch");
+      const statusInfo = document.getElementById("statusInfo");
+      const clearCompletedBtn = document.getElementById("clearCompleted");
+      const exportBtn = document.getElementById("exportBtn");
+      const importBtn = document.getElementById("importBtn");
+      const importFile = document.getElementById("importFile");
+
+      // Utility: load/save
+      function loadTodos() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          todos = raw ? JSON.parse(raw) : [];
+        } catch (e) {
+          todos = [];
+        }
+      }
+      function saveTodos() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+        updateStatus();
+      }
+
+      // Unique id generator
+      function uid() {
+        return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      }
+
+      // Render with filter & search applied
+      function renderTodos() {
+        todoListEl.innerHTML = "";
+        const filter = currentFilter;
+        const q = currentSearch.trim().toLowerCase();
+
+        // create a shallow copy to iterate in stored order
+        todos.forEach((item) => {
+          const matchesFilter =
+            filter === "all" ||
+            (filter === "completed" && item.completed) ||
+            (filter === "active" && !item.completed);
+          if (!matchesFilter) return;
+
+          if (q) {
+            if (!item.todo.toLowerCase().includes(q)) return;
+          }
+
+          const li = document.createElement("li");
+          li.className = "list-group-item d-flex";
+          li.dataset.id = item.id;
+
+          // drag handle
+          const drag = document.createElement("span");
+          drag.className = "drag-handle me-2 text-muted";
+          drag.title = "Seret untuk mengurutkan";
+          drag.innerHTML = '<i class="bi bi-grip-vertical"></i>';
+
+          const left = document.createElement("div");
+          left.className = "flex-fill d-flex align-items-center gap-2";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className = "form-check-input mt-0";
+          checkbox.checked = !!item.completed;
+          checkbox.addEventListener("change", () => {
+            item.completed = checkbox.checked;
+            saveTodos();
+            renderTodos();
+          });
+
+          const label = document.createElement("span");
+          label.className = "todo-label";
+          label.textContent = item.todo;
+          if (item.completed) label.style.textDecoration = "line-through";
+
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "todo-input form-control form-control-sm";
+          input.value = item.todo;
+
+          // right-side buttons
+          const btnGroup = document.createElement("div");
+
+          const editBtn = document.createElement("button");
+          editBtn.className = "btn btn-sm btn-outline-secondary me-1";
+          editBtn.title = "Ubah";
+          editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+
+          const saveEditBtn = document.createElement("button");
+          saveEditBtn.className = "btn btn-sm btn-success me-1";
+          saveEditBtn.style.display = "none";
+          saveEditBtn.title = "Simpan";
+          saveEditBtn.innerHTML = '<i class="bi bi-check-lg"></i>';
+
+          const cancelEditBtn = document.createElement("button");
+          cancelEditBtn.className = "btn btn-sm btn-outline-secondary me-1";
+          cancelEditBtn.style.display = "none";
+          cancelEditBtn.title = "Batal";
+          cancelEditBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+
+          const delBtn = document.createElement("button");
+          delBtn.className = "btn btn-sm btn-outline-danger";
+          delBtn.title = "Hapus";
+          delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+
+          // Edit behaviour
+          editBtn.addEventListener("click", () => {
+            li.classList.add("todo-editing");
+            label.style.display = "none";
+            input.style.display = "inline-block";
+            input.focus();
+            editBtn.style.display = "none";
+            saveEditBtn.style.display = "";
+            cancelEditBtn.style.display = "";
+          });
+
+          saveEditBtn.addEventListener("click", () => {
+            const newTitle = input.value.trim();
+            if (!newTitle) {
+              alert("Judul tidak boleh kosong");
+              return;
+            }
+            // validation: duplicate titles (case-insensitive), exclude current id
+            const duplicate = todos.some(
+              (t) =>
+                t.id !== item.id &&
+                t.todo.toLowerCase() === newTitle.toLowerCase()
+            );
+            if (duplicate) {
+              alert("Sudah ada todo dengan judul yang sama");
+              return;
+            }
+            item.todo = newTitle;
+            li.classList.remove("todo-editing");
+            label.style.display = "";
+            input.style.display = "none";
+            editBtn.style.display = "";
+            saveEditBtn.style.display = "none";
+            cancelEditBtn.style.display = "none";
+            saveTodos();
+            renderTodos();
+          });
+
+          cancelEditBtn.addEventListener("click", () => {
+            input.value = item.todo;
+            li.classList.remove("todo-editing");
+            label.style.display = "";
+            input.style.display = "none";
+            editBtn.style.display = "";
+            saveEditBtn.style.display = "none";
+            cancelEditBtn.style.display = "none";
+          });
+
+          delBtn.addEventListener("click", () => {
+            if (!confirm("Hapus todo ini?")) return;
+            const idx = todos.findIndex((t) => t.id === item.id);
+            if (idx >= 0) {
+              todos.splice(idx, 1);
+              saveTodos();
+              renderTodos();
+            }
+          });
+
+          left.appendChild(checkbox);
+          left.appendChild(label);
+          left.appendChild(input);
+
+          btnGroup.appendChild(editBtn);
+          btnGroup.appendChild(saveEditBtn);
+          btnGroup.appendChild(cancelEditBtn);
+          btnGroup.appendChild(delBtn);
+
+          li.appendChild(drag);
+          li.appendChild(left);
+          li.appendChild(btnGroup);
+
+          todoListEl.appendChild(li);
+        });
+
+        // ensure Sortable is attached after list rendered
+        ensureSortable();
+      }
+
+      // Setup sortable (single instance) and handle order update
+      let sortableInstance = null;
+      function ensureSortable() {
+        if (sortableInstance) return; // create only once
+        sortableInstance = Sortable.create(todoListEl, {
+          handle: ".drag-handle",
+          animation: 150,
+          onEnd: function (evt) {
+            // rebuild todos array in DOM order
+            const newOrder = [];
+            todoListEl.querySelectorAll("li").forEach((li) => {
+              const id = li.dataset.id;
+              const t = todos.find((x) => x.id === id);
+              if (t) newOrder.push(t);
+            });
+            todos = newOrder;
+            saveTodos();
+            renderTodos();
+          },
+        });
+      }
+
+      // Filters
+      filterBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          filterBtns.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentFilter = btn.dataset.filter;
+          renderTodos();
+        });
+      });
+
+      // Search (debounced)
+      let searchTimer = null;
+      inputSearch.addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          currentSearch = inputSearch.value;
+          renderTodos();
+        }, 150);
+      });
+
+      // Add form submit
+      formAdd.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const title = inputTodo.value.trim();
+        addFeedback.style.display = "none";
+        if (!title) {
+          addFeedback.textContent = "Judul tidak boleh kosong";
+          addFeedback.style.display = "";
+          return;
+        }
+        // duplicate check (case-insensitive)
+        const duplicate = todos.some(
+          (t) => t.todo.toLowerCase() === title.toLowerCase()
+        );
+        if (duplicate) {
+          addFeedback.textContent = "Sudah ada todo dengan judul yang sama";
+          addFeedback.style.display = "";
+          return;
+        }
+
+        const newTodo = { id: uid(), todo: title, completed: false };
+        // push to start as previous behaviour used unshift; keep new items on top
+        todos.unshift(newTodo);
+        saveTodos();
+        inputTodo.value = "";
+        renderTodos();
+      });
+
+      // Clear completed
+      clearCompletedBtn.addEventListener("click", () => {
+        if (!confirm("Hapus semua todo yang sudah selesai?")) return;
+        todos = todos.filter((t) => !t.completed);
+        saveTodos();
+        renderTodos();
+      });
+
+      // Export / Import
+      exportBtn.addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(todos, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "todos.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      });
+
+      importBtn.addEventListener("click", () => importFile.click());
+      importFile.addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (!Array.isArray(data)) throw new Error("Invalid format");
+            // normalize: ensure objects have id/title
+            const normalized = data.map((d) => ({
+              id: d.id || uid(),
+              todo: (d.todo || "").toString(),
+              completed: !!d.completed,
+            }));
+            // replace todos, but prevent duplicates by title — preserve order from file
+            const seen = new Set();
+            todos = [];
+            for (const t of normalized) {
+              const key = t.todo.toLowerCase();
+              if (seen.has(key)) continue;
+              seen.add(key);
+              todos.push(t);
+            }
+            saveTodos();
+            renderTodos();
+            importFile.value = "";
+          } catch (err) {
+            alert("Gagal mengimpor: " + err.message);
+          }
+        };
+        reader.readAsText(f);
+      });
+
+      function updateStatus() {
+        const total = todos.length;
+        const completed = todos.filter((t) => t.completed).length;
+        statusInfo.textContent = `${total} todo — ${completed} selesai — urutan disimpan.`;
+      }
+
+      // initial load
+      loadTodos();
+      renderTodos();
+      updateStatus();
+
+      // Save on unload (redundant but safe)
+      window.addEventListener("beforeunload", () => saveTodos());
+    </script>
+  </body>
+</html>
